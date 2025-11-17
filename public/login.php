@@ -1,68 +1,83 @@
 <?php
+require_once __DIR__ . '/../src/env.php';
 require_once __DIR__ . '/../src/db.php';
 require_once __DIR__ . '/../src/session.php';
-start_session();
 
-$title = 'Login';
-$error = '';
+$error = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $correo = trim($_POST['correo'] ?? '');
-    $password = trim($_POST['password'] ?? '');
+    // Captcha
+    $captchaToken = $_POST['g-recaptcha-response'] ?? null;
+    $secret = getenv('RECAPTCHA_SECRET_KEY');
 
-    if ($correo === '' || $password === '') {
-        $error = 'Correo y contraseña son obligatorios.';
+    if (!verifyRecaptcha($captchaToken, $secret)) {
+        $error = "Por favor, completa el captcha.";
     } else {
-        try {
-            $pdo = db();
-            $stmt = $pdo->prepare("SELECT id, nombre, contrasena_hash FROM usuarios WHERE correo = ?");
+        $correo = trim($_POST['correo'] ?? '');
+        $contrasena = $_POST['contrasena'] ?? '';
+
+        if ($correo && $contrasena) {
+            $stmt = $pdo->prepare("SELECT * FROM usuarios WHERE correo = ?");
             $stmt->execute([$correo]);
             $usuario = $stmt->fetch();
 
-            if ($usuario && password_verify($password, $usuario['contrasena_hash'])) {
+            if ($usuario && password_verify($contrasena, $usuario['contrasena_hash'])) {
+                start_session();
                 $_SESSION['user_id'] = $usuario['id'];
                 $_SESSION['user_name'] = $usuario['nombre'];
-                session_regenerate_id(true);
                 header("Location: dashboard.php");
                 exit;
             } else {
-                $error = 'Credenciales incorrectas.';
+                $error = "Credenciales incorrectas.";
             }
-        } catch (Throwable $e) {
-            $error = 'Error de servidor: ' . $e->getMessage();
+        } else {
+            $error = "Por favor, completa todos los campos.";
         }
     }
 }
 
-require __DIR__ . '/partials/header.php';
+/**
+ * Verifica el token de reCAPTCHA con Google
+ */
+function verifyRecaptcha($token, $secret) {
+    if (!$token) return false;
+    $url = 'https://www.google.com/recaptcha/api/siteverify';
+    $data = ['secret' => $secret, 'response' => $token, 'remoteip' => $_SERVER['REMOTE_ADDR'] ?? null];
+    $options = [
+        'http' => [
+            'header'  => "Content-type: application/x-www-form-urlencoded\r\n",
+            'method'  => 'POST',
+            'content' => http_build_query($data)
+        ]
+    ];
+    $result = file_get_contents($url, false, stream_context_create($options));
+    if ($result === false) return false;
+    $json = json_decode($result, true);
+    return isset($json['success']) && $json['success'] === true;
+}
 ?>
-<div class="row justify-content-center">
-  <div class="col-md-6 col-lg-5">
-    <div class="card shadow-sm">
-      <div class="card-body p-4 p-md-5">
-        <h3 class="card-title text-center mb-4">Iniciar sesión</h3>
 
-        <?php if ($error): ?>
-          <div class="alert alert-danger"><?= htmlspecialchars($error) ?></div>
-        <?php endif; ?>
+<?php include 'partials/header.php'; ?>
+<div class="container mt-5">
+    <h2>Login</h2>
+    <?php if ($error): ?>
+        <div class="alert alert-danger"><?= htmlspecialchars($error) ?></div>
+    <?php endif; ?>
+    <form method="post">
+        <div class="mb-3">
+            <label for="correo" class="form-label">Correo</label>
+            <input type="email" name="correo" id="correo" class="form-control" required>
+        </div>
+        <div class="mb-3">
+            <label for="contrasena" class="form-label">Contraseña</label>
+            <input type="password" name="contrasena" id="contrasena" class="form-control" required>
+        </div>
 
-        <form method="post" novalidate>
-          <div class="mb-3">
-            <label class="form-label">Correo</label>
-            <input type="email" name="correo" class="form-control" required>
-          </div>
-          <div class="mb-3">
-            <label class="form-label">Contraseña</label>
-            <input type="password" name="password" class="form-control" required>
-          </div>
-          <button type="submit" class="btn btn-primary w-100">Ingresar</button>
-        </form>
+        <!-- Captcha -->
+        <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+        <div class="g-recaptcha mb-3" data-sitekey="<?= htmlspecialchars(getenv('RECAPTCHA_SITE_KEY')) ?>"></div>
 
-        <p class="text-center mt-3">
-          <a href="register.php">¿No tienes cuenta? Regístrate</a>
-        </p>
-      </div>
-    </div>
-  </div>
+        <button type="submit" class="btn btn-primary w-100">Iniciar sesión</button>
+    </form>
 </div>
-<?php require __DIR__ . '/partials/footer.php'; ?>
+<?php include 'partials/footer.php'; ?>
